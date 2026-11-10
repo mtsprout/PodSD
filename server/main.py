@@ -421,6 +421,11 @@ def order_queue(body: IdList):
     return {"ok": True}
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return FileResponse(STATIC / "favicon.ico", media_type="image/x-icon")
+
+
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")

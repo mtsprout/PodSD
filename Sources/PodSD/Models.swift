@@ -3,17 +3,6 @@ import Security
 
 // Mirrors the server's JSON (decoded with .convertFromSnakeCase).
 
-struct Podcast: Codable, Identifiable, Hashable {
-    var id: Int
-    var feedUrl: String
-    var title: String
-    var artworkUrl: String?
-    var sortOrder: Int
-    var queued: Int
-    var newCount: Int
-    var artwork: URL? { artworkUrl.flatMap(URL.init(string:)) }
-}
-
 struct Episode: Codable, Identifiable, Hashable {
     var id: Int
     var podcastId: Int
@@ -41,15 +30,6 @@ struct Episode: Codable, Identifiable, Hashable {
         }
     }
     var isMP3: Bool { fileExtension == "mp3" }
-}
-
-struct SearchResult: Codable, Identifiable, Hashable {
-    var title: String
-    var author: String
-    var feedUrl: String
-    var artworkUrl: String?
-    var id: String { feedUrl }
-    var artwork: URL? { artworkUrl.flatMap(URL.init(string:)) }
 }
 
 enum Paths {
@@ -87,8 +67,9 @@ enum Paths {
         return downloadsRoot.appendingPathComponent(name).appendingPathExtension(e.fileExtension)
     }
 
-    /// Flip to true if the player is confirmed to handle subfolders: ~/Podcasts/<Show>/<date - title>.mp3
-    static let useSubfolders = false
+    /// Setup toggle (off by default). On: ~/Podcasts/<Show>/<date - title>.mp3. Off: one flat folder, for
+    /// players without subfolder support.
+    static var useSubfolders: Bool { UserDefaults.standard.bool(forKey: "useSubfolders") }
 }
 
 /// Minimal Keychain wrapper so the server password isn't stored in plain preferences.

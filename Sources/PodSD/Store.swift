@@ -55,17 +55,18 @@ final class FileDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sen
     }
 }
 
+/// The Mac side is deliberately small: set up the server, sync the queue from the web, download it.
+/// Everything else (browsing, subscribing, queueing, ordering) happens on the web, which is the source of truth.
 @MainActor
 final class Store: ObservableObject {
     // Settings
     @Published var serverURL: String = UserDefaults.standard.string(forKey: "serverURL") ?? ""
     @Published var username: String = UserDefaults.standard.string(forKey: "username") ?? ""
     @Published var password: String = Keychain.get("password") ?? ""
+    @Published var useSubfolders: Bool = UserDefaults.standard.bool(forKey: "useSubfolders")
 
-    // Mirrored server state (the web is the source of truth)
-    @Published var podcasts: [Podcast] = []
+    // Mirrored from the server
     @Published var queue: [Episode] = []
-    @Published var showEpisodes: [Int: [Episode]] = [:]
 
     // UI state
     @Published var progress: [Int: Double] = [:]      // episode.id -> 0...1
@@ -82,6 +83,16 @@ final class Store: ObservableObject {
         UserDefaults.standard.set(serverURL, forKey: "serverURL")
         UserDefaults.standard.set(username, forKey: "username")
         Keychain.set(password, account: "password")
+        UserDefaults.standard.set(useSubfolders, forKey: "useSubfolders")
+        diskTick += 1                                 // the layout decides where "already on disk" looks
+    }
+
+    /// Discards unsaved edits in the Setup sheet.
+    func revertSettings() {
+        serverURL = UserDefaults.standard.string(forKey: "serverURL") ?? ""
+        username = UserDefaults.standard.string(forKey: "username") ?? ""
+        password = Keychain.get("password") ?? ""
+        useSubfolders = UserDefaults.standard.bool(forKey: "useSubfolders")
     }
 
     // MARK: HTTP
@@ -108,75 +119,23 @@ final class Store: ObservableObject {
         return data
     }
 
-    private func decode<T: Decodable>(_ t: T.Type, _ data: Data) throws -> T {
-        let d = JSONDecoder(); d.keyDecodingStrategy = .convertFromSnakeCase
-        return try d.decode(T.self, from: data)
-    }
-
-    private func report(_ e: Error) { errorMessage = e.localizedDescription }
-
     // MARK: Sync (pull: web wins)
 
-    private struct StateDTO: Decodable { var podcasts: [Podcast]; var queue: [Episode] }
+    private struct StateDTO: Decodable { var queue: [Episode] }
 
-    func sync() async {
-        guard isConfigured else { return }
+    /// Pulls the current queue from the web. Returns false (and sets `errorMessage`) if it couldn't.
+    @discardableResult
+    func sync() async -> Bool {
+        guard isConfigured else { return false }
         syncing = true; defer { syncing = false }
         do {
-            let s = try decode(StateDTO.self, try await send("GET", "/api/state"))
-            podcasts = s.podcasts; queue = s.queue
-            let live = Set(s.podcasts.map(\.id))
-            showEpisodes = showEpisodes.filter { live.contains($0.key) }
-        } catch { report(error) }
-    }
-
-    func loadEpisodes(_ p: Podcast) async {
-        do { showEpisodes[p.id] = try decode([Episode].self, try await send("GET", "/api/podcasts/\(p.id)/episodes?limit=500")) }
-        catch { report(error) }
-    }
-
-    func refreshFeed(_ p: Podcast) async {
-        do { _ = try await send("POST", "/api/podcasts/\(p.id)/refresh"); await loadEpisodes(p); await sync() }
-        catch { report(error) }
-    }
-
-    // MARK: Push local changes back to the web
-
-    func setState(_ ids: [Int], _ state: String, in p: Podcast? = nil) async {
-        guard !ids.isEmpty else { return }
-        do {
-            _ = try await send("POST", "/api/episodes/state", body: ["ids": ids, "state": state])
-            await sync()
-            if let p { await loadEpisodes(p) }
-        } catch { report(error) }
-    }
-
-    func moveQueue(from: IndexSet, to: Int) async {
-        queue.move(fromOffsets: from, toOffset: to)               // optimistic
-        do { _ = try await send("PUT", "/api/queue/order", body: ["ids": queue.map(\.id)]) }
-        catch { report(error); await sync() }
-    }
-
-    func movePodcasts(from: IndexSet, to: Int) async {
-        podcasts.move(fromOffsets: from, toOffset: to)
-        do { _ = try await send("PUT", "/api/podcasts/order", body: ["ids": podcasts.map(\.id)]) }
-        catch { report(error); await sync() }
-    }
-
-    func search(_ term: String) async -> [SearchResult] {
-        let q = term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? term
-        do { return try decode([SearchResult].self, try await send("GET", "/api/search?q=\(q)")) }
-        catch { report(error); return [] }
-    }
-
-    func subscribe(feedUrl: String) async {
-        do { _ = try await send("POST", "/api/podcasts", body: ["feed_url": feedUrl]); await sync() }
-        catch { report(error) }
-    }
-
-    func unsubscribe(_ p: Podcast) async {
-        do { _ = try await send("DELETE", "/api/podcasts/\(p.id)"); await sync() }
-        catch { report(error) }
+            let d = JSONDecoder(); d.keyDecodingStrategy = .convertFromSnakeCase
+            queue = try d.decode(StateDTO.self, from: try await send("GET", "/api/state")).queue
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     // MARK: Download queue -> ~/Podcasts, then mark read on the web
@@ -188,7 +147,7 @@ final class Store: ObservableObject {
 
     func downloadQueue() async {
         guard !downloading else { return }
-        await sync()                                   // web is the source of truth: start from its queue
+        guard await sync() else { return }             // web is the source of truth: start from its queue
         let items = queue
         guard !items.isEmpty else { status = "Queue is empty."; return }
         downloading = true; defer { downloading = false }
