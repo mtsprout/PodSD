@@ -6,6 +6,45 @@ func reveal(_ url: URL) {
     NSWorkspace.shared.open(url)
 }
 
+/// "Save As" for a whole folder: this Mac, or the player's card if it's plugged in.
+@MainActor
+func chooseDestination(_ store: Store) -> URL? {
+    let devices = Store.externalVolumes()
+    let p = NSOpenPanel()
+    p.title = "Download Queue"
+    p.prompt = "Download Here"
+    p.canChooseFiles = false
+    p.canChooseDirectories = true
+    p.canCreateDirectories = true
+    p.allowsMultipleSelection = false
+    p.message = devices.isEmpty
+        ? "Choose where to save the episodes: a folder on this Mac, or the player's card once it's plugged in."
+        : "Choose where to save the episodes. Detected: " + devices.map(\.lastPathComponent).joined(separator: ", ")
+          + ". Pick it to copy straight to the player."
+    let fm = FileManager.default
+    if let d = devices.first { p.directoryURL = d }                                    // the player, if connected
+    else if fm.fileExists(atPath: store.destination.path) { p.directoryURL = store.destination }
+    else { p.directoryURL = fm.homeDirectoryForCurrentUser }
+    return p.runModal() == .OK ? p.url : nil
+}
+
+@MainActor
+func startDownload(_ store: Store) {
+    guard let dest = chooseDestination(store) else { return }
+    store.setDestination(dest)
+    let needed = store.bytesNeeded()
+    if let free = store.bytesAvailable(at: dest), needed > free {
+        let fmt = { (b: Int64) in ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
+        let a = NSAlert()
+        a.messageText = "Not enough free space on “\(dest.lastPathComponent)”"
+        a.informativeText = "The queue needs about \(fmt(needed)) and only \(fmt(free)) is free. Some downloads will fail."
+        a.addButton(withTitle: "Continue Anyway")
+        a.addButton(withTitle: "Cancel")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+    }
+    Task { await store.downloadQueue() }
+}
+
 struct ContentView: View {
     @EnvironmentObject var store: Store
     @State private var showSettings = false
@@ -54,12 +93,16 @@ struct ContentView: View {
 
             Divider()
             HStack {
-                Text(store.status.isEmpty ? summary : store.status)
-                    .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(store.status.isEmpty ? summary : store.status)
+                        .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                    Text("Saves to: \(store.destination.path)")
+                        .font(.caption2).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
+                }
                 Spacer()
-                Button { reveal(Paths.downloadsRoot) } label: { Label("Open Folder", systemImage: "folder") }
-                Button { Task { await store.downloadQueue() } } label: {
-                    Label("Download Queue", systemImage: "arrow.down.circle.fill")
+                Button { reveal(store.destination) } label: { Label("Open Folder", systemImage: "folder") }
+                Button { startDownload(store) } label: {
+                    Label("Download Queue…", systemImage: "arrow.down.circle.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(store.downloading || store.queue.isEmpty)

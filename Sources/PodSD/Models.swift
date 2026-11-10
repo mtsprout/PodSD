@@ -33,10 +33,20 @@ struct Episode: Codable, Identifiable, Hashable {
 }
 
 enum Paths {
-    /// Everything downloaded lands here: ~/Podcasts/<Show>/<date - title>.mp3
-    static var downloadsRoot: URL {
+    static var defaultRoot: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Podcasts", isDirectory: true)
     }
+
+    /// Where downloads go: the folder chosen in the Download Queue dialog (a folder on this Mac, or the
+    /// player's card), remembered between runs. Falls back to ~/Podcasts.
+    static var downloadsRoot: URL {
+        if let p = UserDefaults.standard.string(forKey: "destination"), !p.isEmpty {
+            return URL(fileURLWithPath: p, isDirectory: true)
+        }
+        return defaultRoot
+    }
+
+    static func setDestination(_ url: URL) { UserDefaults.standard.set(url.path, forKey: "destination") }
 
     /// Makes a name safe for a FAT32 microSD card (no / \ : * ? " < > |), and not too long.
     static func safeName(_ s: String, max: Int = 80) -> String {

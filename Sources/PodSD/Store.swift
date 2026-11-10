@@ -64,6 +64,7 @@ final class Store: ObservableObject {
     @Published var username: String = UserDefaults.standard.string(forKey: "username") ?? ""
     @Published var password: String = Keychain.get("password") ?? ""
     @Published var useSubfolders: Bool = UserDefaults.standard.bool(forKey: "useSubfolders")
+    @Published var destination: URL = Paths.downloadsRoot      // chosen in the Download Queue dialog
 
     // Mirrored from the server
     @Published var queue: [Episode] = []
@@ -138,7 +139,32 @@ final class Store: ObservableObject {
         }
     }
 
-    // MARK: Download queue -> ~/Podcasts, then mark read on the web
+    // MARK: Destination (this Mac or the player's card)
+
+    func setDestination(_ url: URL) {
+        Paths.setDestination(url)
+        destination = url
+        diskTick += 1                                  // "already on disk" now looks in the new place
+    }
+
+    /// Mounted external volumes (an SD card in a reader, a player in USB-storage mode).
+    static func externalVolumes() -> [URL] {
+        let keys: [URLResourceKey] = [.volumeIsInternalKey]
+        let vols = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
+        return vols.filter { u in
+            u.path.hasPrefix("/Volumes/") && ((try? u.resourceValues(forKeys: Set(keys)))?.volumeIsInternal == false)
+        }
+    }
+
+    /// Bytes still to download (queued episodes not already in the destination), by the feed's stated sizes.
+    func bytesNeeded() -> Int64 { queue.filter { !isOnDisk($0) }.compactMap(\.size).reduce(0, +) }
+
+    func bytesAvailable(at url: URL) -> Int64? {
+        let v = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
+        return v?.volumeAvailableCapacityForImportantUsage ?? v?.volumeAvailableCapacity.map(Int64.init)
+    }
+
+    // MARK: Download queue -> chosen destination, then mark read on the web
 
     func isOnDisk(_ e: Episode) -> Bool {
         _ = diskTick
@@ -150,6 +176,15 @@ final class Store: ObservableObject {
         guard await sync() else { return }             // web is the source of truth: start from its queue
         let items = queue
         guard !items.isEmpty else { status = "Queue is empty."; return }
+
+        // The default folder is created on demand; anything else (e.g. the player's card) must already be there.
+        let fm0 = FileManager.default
+        if destination.path == Paths.defaultRoot.path { try? fm0.createDirectory(at: destination, withIntermediateDirectories: true) }
+        var isDir: ObjCBool = false
+        guard fm0.fileExists(atPath: destination.path, isDirectory: &isDir), isDir.boolValue else {
+            errorMessage = "“\(destination.lastPathComponent)” isn't available. Is the player or card plugged in?"
+            return
+        }
         downloading = true; defer { downloading = false }
 
         var done = 0
@@ -185,7 +220,7 @@ final class Store: ObservableObject {
         }
 
         await sync()
-        status = "Done: \(done) downloaded and marked read" + (failures.isEmpty ? "." : ", \(failures.count) failed.")
+        status = "Done: \(done) saved to “\(destination.lastPathComponent)” and marked read" + (failures.isEmpty ? "." : ", \(failures.count) failed.")
         if !failures.isEmpty { errorMessage = failures.joined(separator: "\n") }
     }
 }

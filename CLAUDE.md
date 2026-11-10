@@ -1,7 +1,8 @@
 # PodSD
 
 Single-user podcast tool for a screen-free MP3 player (microSD card). The **web app is the source of
-truth**; the Mac app mirrors it and downloads the queue to `~/Podcasts`.
+truth**; the Mac app mirrors it and downloads the queue to a folder chosen each time in a
+folder dialog (this Mac, or the player's card; default `~/Podcasts`; last choice is remembered).
 
 ## Layout
 - `server/main.py`: FastAPI + SQLite (stdlib `sqlite3`), HTTP Basic auth, hourly feed refresh.
@@ -28,7 +29,7 @@ truth**; the Mac app mirrors it and downloads the queue to `~/Podcasts`.
 - The page uses **relative URLs** (`api/...`, no leading slash) because it is served under a subpath
   behind nginx, which strips the prefix. Keep it that way; don't add absolute `/api/...` paths.
 - Filenames must be FAT32-safe (`Paths.safeName`). Layout is **flat** (`<Show> - <date> - <title>.mp3`)
-  because subfolder support on the player is unconfirmed; the Setup sheet has a "Use subfolders" toggle
+  because subfolder support on the player is unconfirmed (paths are relative to the chosen destination); the Setup sheet has a "Use subfolders" toggle
   (persisted in UserDefaults, read via `Paths.useSubfolders`).
 - Apple charts use the iTunes `toppodcasts` RSS + `lookup` (feed URLs); category ids are in
   `GENRES` in `main.py`. Charts are cached in memory for an hour.

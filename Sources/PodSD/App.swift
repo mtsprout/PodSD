@@ -9,7 +9,7 @@ struct PodSDApp: App {
         }
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Open Podcasts Folder") { reveal(Paths.downloadsRoot) }
+                Button("Open Download Folder") { reveal(Paths.downloadsRoot) }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
             }
         }
