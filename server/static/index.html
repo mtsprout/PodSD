@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PodSD</title>
+<style>
+  :root { --bg:#fff; --fg:#1c1c1e; --mut:#6b6b70; --line:#e2e2e6; --acc:#0a64d8; --card:#f6f6f8; --ok:#1a8f3c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#17171a; --fg:#ececf0; --mut:#9a9aa3; --line:#2c2c32; --acc:#5aa2ff; --card:#212126; --ok:#4cc870; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.4 -apple-system,system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; gap:8px; padding:10px 16px; border-bottom:1px solid var(--line); align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0 12px 0 0; }
+  input[type=text] { flex:1; min-width:180px; padding:7px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg); }
+  button { padding:6px 11px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg); cursor:pointer; font:inherit; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  .layout { display:grid; grid-template-columns:260px 1fr; min-height:calc(100vh - 54px); }
+  nav { border-right:1px solid var(--line); padding:8px; }
+  nav .item { display:flex; align-items:center; gap:6px; padding:6px 8px; border-radius:8px; cursor:pointer; }
+  nav .item.sel { background:var(--card); }
+  nav .item .t { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  nav .badge { font-size:12px; color:var(--mut); }
+  nav .mv { padding:0 4px; border:none; background:none; color:var(--mut); }
+  main { padding:12px 16px; min-width:0; }
+  h2 { margin:4px 0 10px; font-size:18px; }
+  .row { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .row .body { flex:1; min-width:0; }
+  .row .sub { color:var(--mut); font-size:12.5px; }
+  .row img { width:44px; height:44px; border-radius:8px; background:var(--card); object-fit:cover; }
+  .pill { font-size:11.5px; padding:1px 7px; border-radius:99px; border:1px solid var(--line); color:var(--mut); }
+  .pill.queued { color:var(--acc); border-color:var(--acc); }
+  .pill.read { color:var(--ok); border-color:var(--ok); }
+  .bar { display:flex; gap:8px; margin:0 0 8px; flex-wrap:wrap; align-items:center; }
+  .msg { color:var(--mut); padding:20px 0; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 12px; }
+  .chip { border-radius:99px; padding:4px 11px; font-size:13px; }
+  .chip.sel { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .rank { width:26px; text-align:right; color:var(--mut); font-variant-numeric:tabular-nums; }
+  .preview { margin:0 0 6px 36px; padding:10px 12px; background:var(--card); border-radius:10px; font-size:13.5px; }
+  .preview ul { margin:6px 0 0; padding-left:18px; color:var(--mut); }
+  .sec-h { display:flex; align-items:baseline; justify-content:space-between; margin:20px 0 8px; }
+  .sec-h:first-child { margin-top:4px; }
+  .sec-h h3 { margin:0; font-size:17px; }
+  button.link { border:none; background:none; color:var(--acc); padding:2px 4px; }
+  .strip { display:flex; gap:14px; overflow-x:auto; padding:2px 2px 12px; scroll-snap-type:x proximity; }
+  .tile { flex:0 0 164px; scroll-snap-align:start; min-width:0; }
+  .tile .imgwrap { position:relative; }
+  .tile img { width:164px; height:164px; border-radius:14px; object-fit:cover; background:var(--card); display:block; cursor:pointer; }
+  .tile .rk { position:absolute; top:7px; left:7px; background:rgba(0,0,0,.65); color:#fff; font-size:12px; padding:1px 8px; border-radius:99px; }
+  .tile .tt { margin-top:7px; font-weight:600; font-size:13.5px; line-height:1.25; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .tile .sub { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tile .tact { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; align-items:center; }
+  .tile .tact button { padding:3px 9px; font-size:12.5px; }
+  @media (max-width:700px) { .layout { grid-template-columns:1fr; } nav { border-right:none; border-bottom:1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>PodSD</h1>
+  <input id="q" type="text" placeholder="Search podcasts, or paste an RSS feed URL" autocomplete="off">
+  <button id="go" class="primary">Search / Add</button>
+</header>
+<div class="layout">
+  <nav id="nav"></nav>
+  <main id="main"></main>
+</div>
+<script>
+let state = {podcasts: [], queue: []};
+let view = {kind: 'store'};          // store (Podcasts, the landing page) | queue | show | search
+let episodes = [], picked = new Set(), results = [];
+// Store Front
+// storeGenre: 'home' = tile page, null = full "Top overall" list, or an Apple category id.
+let genres = [], storeGenre = 'home', storeItems = [], storeMore = true, storeBusy = false;
+const HOME_SECTIONS = [
+  {id: null, name: 'Top 10 Podcasts'}, {id: 1489, name: 'Top 10 Current Events'}, {id: 1310, name: 'Top 10 Music'},
+  {id: 1318, name: 'Top 10 Tech'}, {id: 1488, name: 'Top 10 True Crime'},
+];
+const homeData = new Map();          // String(section id) -> items
+let homeBusy = false;
+const previews = new Map();          // feed_url -> {loading} | {data} | {error}; presence = panel open
+const STORE_PAGE = 25, STORE_MAX = 200;
+
+async function api(path, opts = {}) {
+  // Relative URL (no leading slash) so the app works under a subpath like /podcasts/ behind nginx.
+  const r = await fetch(path.replace(/^\//, ''), {headers: {'Content-Type': 'application/json'}, ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined});
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m; } catch {} throw new Error(m); }
+  return r.json();
+}
+const fail = e => alert(e.message);
+
+function el(tag, props = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else if (k === 'class') n.className = v;
+    else n[k] = v;
+  }
+  for (const c of kids.flat()) if (c != null) n.append(c);
+  return n;
+}
+const fmtDate = s => s ? new Date(s * 1000).toLocaleDateString(undefined, {year:'numeric', month:'short', day:'numeric'}) : '';
+const fmtSize = b => b ? (b / 1048576 < 1000 ? (b / 1048576).toFixed(0) + ' MB' : (b / 1073741824).toFixed(1) + ' GB') : '';
+
+async function reload() {
+  state = await api('/api/state');
+  renderNav();
+  if (view.kind === 'show') await loadShow(view.id, false); else render();
+}
+
+function renderNav() {
+  const nav = document.getElementById('nav');
+  nav.replaceChildren(
+    el('div', {class: 'item' + (view.kind === 'store' ? ' sel' : ''), onclick: openStore},
+      el('span', {class: 't'}, 'Podcasts')),
+    el('div', {class: 'item' + (view.kind === 'queue' ? ' sel' : ''), onclick: () => { view = {kind: 'queue'}; renderNav(); render(); }},
+      el('span', {class: 't'}, 'Download queue'), el('span', {class: 'badge'}, state.queue.length)),
+    el('div', {class: 'sub', style: 'padding:10px 8px 4px;color:var(--mut);font-size:12px'}, 'SHOWS'),
+    ...state.podcasts.map((p, i) => el('div', {class: 'item' + (view.kind === 'show' && view.id === p.id ? ' sel' : ''),
+        onclick: () => loadShow(p.id)},
+      el('span', {class: 't', title: p.title}, p.title),
+      el('span', {class: 'badge'}, p.queued ? p.queued + ' queued' : ''),
+      el('button', {class: 'mv', title: 'Move up', disabled: i === 0, onclick: e => { e.stopPropagation(); movePodcast(i, -1); }}, '↑'),
+      el('button', {class: 'mv', title: 'Move down', disabled: i === state.podcasts.length - 1, onclick: e => { e.stopPropagation(); movePodcast(i, 1); }}, '↓')))
+  );
+}
+
+async function movePodcast(i, d) {
+  const ids = state.podcasts.map(p => p.id);
+  [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
+  await api('/api/podcasts/order', {method: 'PUT', body: {ids}}).catch(fail);
+  reload();
+}
+
+async function loadShow(id, resetPicks = true) {
+  view = {kind: 'show', id};
+  if (resetPicks) picked = new Set();
+  episodes = await api(`/api/podcasts/${id}/episodes?limit=500`).catch(e => { fail(e); return []; });
+  renderNav(); render();
+}
+
+function render() {
+  const main = document.getElementById('main');
+  if (view.kind === 'search') return main.replaceChildren(renderSearch());
+  if (view.kind === 'store') return main.replaceChildren(renderStore());
+  if (view.kind === 'show') return main.replaceChildren(renderShow());
+  main.replaceChildren(renderQueue());
+}
+
+function renderSearch() {
+  const wrap = el('div', {}, el('h2', {}, 'Search results'));
+  if (!results.length) wrap.append(el('div', {class: 'msg'}, 'No results.'));
+  for (const r of results) {
+    const have = state.podcasts.some(p => p.feed_url === r.feed_url);
+    wrap.append(el('div', {class: 'row'},
+      el('img', {src: r.artwork_url || '', alt: ''}),
+      el('div', {class: 'body'}, el('div', {}, r.title), el('div', {class: 'sub'}, r.author)),
+      have ? el('span', {class: 'pill read'}, 'Subscribed')
+           : el('button', {class: 'primary', onclick: async e => {
+               e.target.disabled = true; e.target.textContent = 'Adding…';
+               try { const res = await api('/api/podcasts', {method: 'POST', body: {feed_url: r.feed_url}});
+                     await reload(); await loadShow(res.id); } catch (er) { fail(er); e.target.disabled = false; e.target.textContent = 'Subscribe'; }
+             }}, 'Subscribe')));
+  }
+  return wrap;
+}
+
+function renderShow() {
+  const p = state.podcasts.find(x => x.id === view.id);
+  if (!p) return el('div', {class: 'msg'}, 'Show not found.');
+  const wrap = el('div', {}, el('h2', {}, p.title));
+  const sel = [...picked];
+  wrap.append(el('div', {class: 'bar'},
+    el('button', {class: 'primary', disabled: !sel.length, onclick: () => bulk(sel, 'queued')}, `Queue selected (${sel.length})`),
+    el('button', {disabled: !sel.length, onclick: () => bulk(sel, 'read')}, 'Mark read'),
+    el('button', {disabled: !sel.length, onclick: () => bulk(sel, 'new')}, 'Mark new'),
+    el('button', {onclick: async () => { await api(`/api/podcasts/${p.id}/refresh`, {method: 'POST'}).catch(fail); reload(); }}, 'Refresh feed'),
+    el('button', {onclick: async () => { if (confirm(`Unsubscribe from “${p.title}”?`)) { await api(`/api/podcasts/${p.id}`, {method: 'DELETE'}).catch(fail); view = {kind: 'queue'}; reload(); } }}, 'Unsubscribe')));
+  if (!episodes.length) wrap.append(el('div', {class: 'msg'}, 'No episodes.'));
+  for (const e of episodes) {
+    wrap.append(el('div', {class: 'row'},
+      el('input', {type: 'checkbox', checked: picked.has(e.id), onchange: ev => { ev.target.checked ? picked.add(e.id) : picked.delete(e.id); render(); }}),
+      el('div', {class: 'body'}, el('div', {}, e.title), el('div', {class: 'sub'}, [fmtDate(e.pub_date), fmtSize(e.size)].filter(Boolean).join(' · '))),
+      el('span', {class: 'pill ' + e.state}, e.state)));
+  }
+  return wrap;
+}
+
+function renderQueue() {
+  const wrap = el('div', {}, el('h2', {}, 'Download queue'),
+    el('div', {class: 'sub', style: 'margin-bottom:8px'}, 'The Mac app downloads these in this order, then marks them read.'));
+  if (!state.queue.length) wrap.append(el('div', {class: 'msg'}, 'Nothing queued. Open a show and tick episodes to queue.'));
+  state.queue.forEach((e, i) => wrap.append(el('div', {class: 'row'},
+    el('div', {class: 'body'}, el('div', {}, e.title), el('div', {class: 'sub'}, [e.podcast_title, fmtDate(e.pub_date), fmtSize(e.size)].filter(Boolean).join(' · '))),
+    el('button', {disabled: i === 0, onclick: () => moveQ(i, -1)}, '↑'),
+    el('button', {disabled: i === state.queue.length - 1, onclick: () => moveQ(i, 1)}, '↓'),
+    el('button', {onclick: async () => { await api(`/api/episodes/${e.id}`, {method: 'PATCH', body: {state: 'new'}}).catch(fail); reload(); }}, 'Remove'))));
+  return wrap;
+}
+
+async function moveQ(i, d) {
+  const ids = state.queue.map(e => e.id);
+  [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
+  await api('/api/queue/order', {method: 'PUT', body: {ids}}).catch(fail);
+  reload();
+}
+
+async function bulk(ids, st) {
+  await api('/api/episodes/state', {method: 'POST', body: {ids, state: st}}).catch(fail);
+  picked = new Set();
+  reload();
+}
+
+// ---------- Store Front ----------
+async function openStore() {
+  view = {kind: 'store'}; renderNav(); render();
+  if (!genres.length) { genres = await api('/api/genres').catch(() => []); render(); }
+  if (storeGenre === 'home') { if (![...homeData.values()].some(a => a.length)) await loadHome(); }
+  else if (!storeItems.length) await loadStore(true);
+}
+
+async function pickGenre(id) {
+  storeGenre = id; storeItems = []; storeMore = true; previews.clear();
+  if (view.kind !== 'store') { view = {kind: 'store'}; renderNav(); }
+  render();
+  if (id === 'home') { if (![...homeData.values()].some(a => a.length)) await loadHome(); }
+  else await loadStore(true);
+}
+
+async function loadHome() {
+  if (homeBusy) return;
+  homeBusy = true; render();
+  await Promise.all(HOME_SECTIONS.map(async s => {
+    try { homeData.set(String(s.id), await api('/api/charts?limit=10' + (s.id ? `&genre=${s.id}` : ''))); }
+    catch (e) { homeData.set(String(s.id), []); }
+    if (view.kind === 'store') render();          // show each row as soon as it arrives
+  }));
+  homeBusy = false;
+  if (view.kind === 'store') render();
+}
+
+function tile(it) {
+  const have = state.podcasts.some(p => p.feed_url === it.feed_url);
+  return el('div', {class: 'tile'},
+    el('div', {class: 'imgwrap'},
+      el('img', {src: it.artwork_url || '', alt: '', onclick: () => togglePreview(it.feed_url)}),
+      el('span', {class: 'rk'}, it.rank)),
+    el('div', {class: 'tt', title: it.title}, it.title),
+    el('div', {class: 'sub'}, it.author),
+    el('div', {class: 'tact'},
+      el('button', {onclick: () => togglePreview(it.feed_url)}, previews.has(it.feed_url) ? 'Hide' : 'Preview'),
+      have ? el('span', {class: 'pill read'}, 'Subscribed')
+           : el('button', {class: 'primary', onclick: e => subscribeFrom(it, e.target)}, 'Subscribe')));
+}
+
+function renderHome() {
+  const out = [];
+  for (const s of HOME_SECTIONS) {
+    const items = homeData.get(String(s.id)) || [];
+    if (!items.length) continue;
+    out.push(el('div', {class: 'sec-h'}, el('h3', {}, s.name),
+      el('button', {class: 'link', onclick: () => pickGenre(s.id)}, 'See all ›')));
+    out.push(el('div', {class: 'strip'}, items.map(tile)));
+    for (const it of items) {                      // preview panel for any open tile in this row
+      const pv = renderPreview(it.feed_url);
+      if (!pv) continue;
+      pv.style.margin = '0 0 8px';
+      pv.prepend(el('div', {style: 'font-weight:600;margin-bottom:4px'}, it.title));
+      out.push(pv);
+    }
+  }
+  if (!out.length) out.push(el('div', {class: 'msg'}, (homeBusy || !homeData.size) ? 'Loading…' : 'Couldn’t load the charts. Try again in a moment.'));
+  return out;
+}
+
+async function loadStore(reset) {
+  if (storeBusy) return;
+  storeBusy = true; render();
+  try {
+    const off = reset ? 0 : storeItems.length;
+    const q = `/api/charts?offset=${off}&limit=${STORE_PAGE}` + (storeGenre ? `&genre=${storeGenre}` : '');
+    const page = await api(q);
+    storeItems = reset ? page : storeItems.concat(page);
+    // Apple can drop a few entries per page, so go by the rank we reached rather than the count.
+    const reached = storeItems.length ? storeItems[storeItems.length - 1].rank : 0;
+    storeMore = page.length > 0 && reached < STORE_MAX;
+  } catch (e) { fail(e); storeMore = false; }
+  storeBusy = false; render();
+}
+
+async function togglePreview(feedUrl) {
+  if (previews.has(feedUrl)) { previews.delete(feedUrl); return render(); }
+  previews.set(feedUrl, {loading: true}); render();
+  try { previews.set(feedUrl, {data: await api('/api/preview?feed_url=' + encodeURIComponent(feedUrl))}); }
+  catch (e) { previews.set(feedUrl, {error: e.message}); }
+  if (view.kind === 'store') render();
+}
+
+async function subscribeFrom(item, btn) {
+  btn.disabled = true; btn.textContent = 'Adding…';
+  try { await api('/api/podcasts', {method: 'POST', body: {feed_url: item.feed_url}}); await reload(); }
+  catch (e) { fail(e); btn.disabled = false; btn.textContent = 'Subscribe'; }
+}
+
+function renderPreview(feedUrl) {
+  const p = previews.get(feedUrl);
+  if (!p) return null;
+  if (p.loading) return el('div', {class: 'preview'}, 'Loading…');
+  if (p.error) return el('div', {class: 'preview'}, 'Couldn’t load preview: ' + p.error);
+  const d = p.data;
+  return el('div', {class: 'preview'},
+    el('div', {}, d.description || 'No description.'),
+    d.episodes.length ? el('ul', {}, d.episodes.map(e => el('li', {}, e.title + (e.pub_date ? ' · ' + fmtDate(e.pub_date) : '')))) : null);
+}
+
+function renderStore() {
+  const wrap = el('div', {}, el('h2', {}, 'Podcasts'));
+  const chip = (id, name) => el('button', {class: 'chip' + (storeGenre === id ? ' sel' : ''), onclick: () => pickGenre(id)}, name);
+  wrap.append(el('div', {class: 'chips'}, chip('home', 'Home'), chip(null, 'Top overall'), ...genres.map(g => chip(g.id, g.name))));
+  if (storeGenre === 'home') { wrap.append(...renderHome()); return wrap; }
+  if (!storeItems.length && !storeBusy) wrap.append(el('div', {class: 'msg'}, 'Nothing to show.'));
+  for (const it of storeItems) {
+    const have = state.podcasts.some(p => p.feed_url === it.feed_url);
+    wrap.append(el('div', {class: 'row'},
+      el('div', {class: 'rank'}, it.rank),
+      el('img', {src: it.artwork_url || '', alt: ''}),
+      el('div', {class: 'body'}, el('div', {}, it.title), el('div', {class: 'sub'}, [it.author, it.genre].filter(Boolean).join(' · '))),
+      el('button', {onclick: () => togglePreview(it.feed_url)}, previews.has(it.feed_url) ? 'Hide' : 'Preview'),
+      have ? el('span', {class: 'pill read'}, 'Subscribed')
+           : el('button', {class: 'primary', onclick: e => subscribeFrom(it, e.target)}, 'Subscribe')));
+    const pv = renderPreview(it.feed_url);
+    if (pv) wrap.append(pv);
+  }
+  if (storeBusy) wrap.append(el('div', {class: 'msg'}, 'Loading…'));
+  else if (storeMore && storeItems.length) wrap.append(el('div', {class: 'bar'}, el('button', {onclick: () => loadStore(false)}, 'Show more')));
+  return wrap;
+}
+
+async function go() {
+  const q = document.getElementById('q').value.trim();
+  if (!q) return;
+  try {
+    if (/^(https?|feed|itpc):/i.test(q)) {
+      const res = await api('/api/podcasts', {method: 'POST', body: {feed_url: q}});
+      document.getElementById('q').value = '';
+      await reload(); await loadShow(res.id);
+    } else {
+      results = await api('/api/search?q=' + encodeURIComponent(q));
+      view = {kind: 'search'}; renderNav(); render();
+    }
+  } catch (e) { fail(e); }
+}
+document.getElementById('go').addEventListener('click', go);
+document.getElementById('q').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+reload().then(openStore).catch(fail);
+</script>
+</body>
+</html>

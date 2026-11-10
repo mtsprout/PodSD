@@ -1,0 +1,13 @@
+.DS_Store
+
+# Mac app build output
+.build/
+PodSD.app/
+
+# Server runtime / local state
+server/.venv/
+server/__pycache__/
+*.pyc
+*.sqlite3
+*.sqlite3-*
+.env
